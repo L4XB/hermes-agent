@@ -16,6 +16,14 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 _MEMO_ATTR = "_prompt_cache_scope_memo"
+#: An explicitly inherited scope. Set only by a same-model cache-parity fork,
+#: which copies the parent's session_id for prefix warmth but cannot RESOLVE
+#: the parent's scope: `_persist_disabled` makes `declared_conversation_scope`
+#: fail closed and `_session_db = None` removes the lineage walk, so the fork
+#: lands on the physical id while a gateway parent declares `gwk_...` (#109964).
+#: Nothing else sets it, so the fail-closed rule still holds for every fork
+#: that was not handed its parent's scope on purpose.
+_INHERITED_ATTR = "_prompt_cache_scope_inherited"
 _DECLARED_SCOPE_PREFIX = "gwk_"
 
 
@@ -132,6 +140,11 @@ def declared_conversation_scope(agent: Any) -> Optional[str]:
 def resolve_prompt_cache_scope(agent: Any) -> str:
     """Rotation-stable cache-scope id: declared scope, else the compression-lineage root of
     ``agent.session_id`` (the physical id without ancestry/DB). Memoized on the agent."""
+    inherited = getattr(agent, _INHERITED_ATTR, None)
+    if isinstance(inherited, str) and inherited:
+        # Ahead of the memo: an inherited scope is a decision the fork's builder
+        # already made, not something to re-derive from this agent's own state.
+        return inherited
     sid = str(getattr(agent, "session_id", None) or "")
     if not sid:
         return ""

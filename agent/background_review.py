@@ -861,6 +861,38 @@ def _inherit_parent_tool_surface(review_agent: Any, agent: Any) -> None:
 
 
 
+def _inherit_parent_cache_scope(review_agent: Any, agent: Any) -> None:
+    """Pin the parent's resolved cache scope onto a same-model fork.
+
+    Copying the session_id is not enough. The scope a provider routes on is
+    RESOLVED, not copied, and the two attributes this function's caller sets for
+    persistence isolation both remove an input to that resolution:
+    ``_persist_disabled`` makes ``declared_conversation_scope`` return None (it
+    fails closed so an ordinary fork cannot merge onto its parent's key) and
+    ``_session_db = None`` removes the lineage walk. So the fork falls back to
+    the physical id while a gateway parent declares ``gwk_<hash>`` — same
+    session_id, different scope, and the warm cache the rest of this function
+    exists to hit is missed on the first request (#109964).
+
+    Same-model path only: a routed fork talks to a different model, where the
+    parent's scope names a cache that cannot serve it.
+
+    Best effort. A resolution failure here must not stop a review from running,
+    and the fork simply keeps the pre-existing behaviour.
+    """
+    try:
+        from agent.prompt_cache_scope import (
+            _INHERITED_ATTR,
+            resolve_prompt_cache_scope_safe,
+        )
+
+        scope = resolve_prompt_cache_scope_safe(agent)
+        if scope:
+            setattr(review_agent, _INHERITED_ATTR, scope)
+    except Exception:
+        logger.debug("cache-parity fork could not inherit the parent's scope", exc_info=True)
+
+
 def build_cache_parity_fork(
     agent: Any, task_cfg: Optional[Dict[str, Any]] = None, *, max_iterations: int,
     write_origin: str = "background_review",
@@ -907,6 +939,7 @@ def build_cache_parity_fork(
         review_agent._cached_system_prompt = agent._cached_system_prompt
         review_agent.session_start = agent.session_start
         _inherit_parent_tool_surface(review_agent, agent)
+        _inherit_parent_cache_scope(review_agent, agent)
     _detach_fork_compression(review_agent)
     # Compaction bounds a single request; this bounds the WHOLE review (checked in
     # conversation_loop via _review_input_budget_exhausted).
