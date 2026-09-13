@@ -106,3 +106,72 @@ def test_delivery_keeps_the_sender_and_refuses_a_different_one_under_the_same_id
     with pytest.raises(ValueError):
         mailbox.deliver_to_live_owner(tmp_path, owner, "hello", delivery_id="b" * 32, author={**author, "id": "bot:other"})
     assert "author" not in mailbox.deliver_to_live_owner(tmp_path, owner, "no sender", delivery_id="c" * 32)
+
+
+# --- one unreadable ticket must not wedge the pipeline (#109820) ----------------------
+#
+# `_read` tolerated only FileNotFoundError, and both bulk scans went through it: the
+# sender's sequence high-water scan and the receiver's pending scan. One unreadable
+# ticket therefore stopped every sender (admissions came back `ambiguous`) and crashed
+# the receiver's poll on every cycle, while every other ticket in the directory was fine.
+
+def _owner_for(tmp_path):
+    return dict(profile_home=str(tmp_path.resolve()), session_id="chat",
+                lease_id="lease", live_session_id="live")
+
+
+def _root_of(tmp_path):
+    from tools import bot_live_delivery as mailbox
+
+    return mailbox._root(tmp_path)
+
+
+@pytest.mark.parametrize("flavour", ["corrupt-json", "directory", "unreadable"])
+def test_one_unreadable_ticket_does_not_wedge_the_pipeline(tmp_path, flavour):
+    from tools import bot_live_delivery as mailbox
+
+    owner = _owner_for(tmp_path)
+    # A first real delivery, so the directory (and the lock) exist.
+    first = mailbox.deliver_to_live_owner(tmp_path, owner, "first", delivery_id="a" * 32)
+    root = _root_of(tmp_path)
+
+    intruder = root / f"{'b' * 32}.json"
+    if flavour == "corrupt-json":
+        intruder.write_text("{not json", encoding="utf-8")  # ValueError on read
+    elif flavour == "directory":
+        intruder.mkdir()  # IsADirectoryError / PermissionError, an OSError either way
+    else:
+        if os.name == "nt" or os.geteuid() == 0:
+            pytest.skip("chmod does not deny the owner here")
+        intruder.write_text("{}", encoding="utf-8")
+        os.chmod(intruder, 0o000)
+
+    try:
+        # Sender: the high-water scan walks the whole directory, including the intruder.
+        second = mailbox.deliver_to_live_owner(tmp_path, owner, "second", delivery_id="c" * 32)
+        assert second["status"] == "queued"
+
+        # Receiver: the pending scan does too, and still finds the oldest queued ticket.
+        claimed = mailbox.claim_pending_delivery(tmp_path, owner)
+        assert claimed is not None
+        assert claimed["delivery_id"] == first["delivery_id"]
+    finally:
+        if flavour == "unreadable":
+            os.chmod(intruder, 0o600)
+
+
+def test_a_targeted_read_of_a_broken_ticket_is_still_an_error(tmp_path):
+    # The other half of the contract: only the SCANS are tolerant. Treating an
+    # unreadable ticket as absent in a targeted read would let a delivery overwrite a
+    # live admission, or report one that exists as not found.
+    from tools import bot_live_delivery as mailbox
+
+    owner = _owner_for(tmp_path)
+    delivery_id = "d" * 32
+    mailbox.deliver_to_live_owner(tmp_path, owner, "hello", delivery_id=delivery_id)
+    (_root_of(tmp_path) / f"{delivery_id}.json").write_text("{not json", encoding="utf-8")
+
+    with pytest.raises(ValueError):  # json.JSONDecodeError, not FileNotFoundError
+        mailbox.complete_delivery(tmp_path, delivery_id, status="settled", reply="hi")
+    with pytest.raises(ValueError):
+        mailbox.deliver_to_live_owner(tmp_path, owner, "hello", delivery_id=delivery_id)

@@ -8,6 +8,7 @@ not permission to execute the same input again. Receipts are permanent.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
@@ -19,6 +20,8 @@ from pathlib import Path
 from typing import Any
 
 from hermes_cli.active_sessions import _FileLock
+
+logger = logging.getLogger("tools.bot_live_delivery")
 
 DELIVERY_DIR_NAME = "bot_live_delivery"
 _OWNER_KEYS = ("profile_home", "session_id", "lease_id", "live_session_id")
@@ -96,6 +99,33 @@ def _read(path: Path) -> dict[str, Any] | None:
         return None
 
 
+def _scan_read(path: Path) -> dict[str, Any] | None:
+    """One ticket as seen by a BULK scan: a neighbour that cannot be read is skipped.
+
+    `_read` stays strict and the TARGETED reads keep using it — treating an unreadable
+    ticket as absent there would let `deliver_to_live_owner` overwrite a live admission,
+    and would make `complete_delivery` report a delivery that exists as not found.
+
+    A scan is a different question. The file belongs to some other delivery, and a hard
+    failure here buys nothing: one unreadable ticket stopped EVERY sender (admissions
+    came back `ambiguous`) and crashed the receiver's poll on every cycle, while the
+    other tickets in the directory were fine. Causes seen in the wild: an ownership
+    change after an elevated relaunch on Windows, ACL drift, a restore from backup, a
+    file half-written by a killed process.
+
+    Skipping is not free, and the cost is bounded. A ticket missed by the high-water
+    scan can leave a later delivery sharing its sequence number, and
+    `claim_pending_delivery` then orders the two by `delivery_id`, which is stable and
+    total. A queued ticket missed by the pending scan stays queued — exactly where the
+    wedge left it, without taking the pipeline down with it.
+    """
+    try:
+        return _read(path)
+    except (OSError, ValueError) as err:
+        logger.warning("skipping unreadable delivery ticket %s: %s", path.name, err)
+        return None
+
+
 def _write(path: Path, record: dict[str, Any]) -> None:
     atomic_json_write(path, record, indent=None, sort_keys=True, fsync_dir=True, mode=0o600)
 
@@ -124,7 +154,7 @@ def deliver_to_live_owner(
         # high-water mark, allocated while holding the cross-process lock.
         sequence = max((record.get("sequence", record["created_at"])
                         for candidate in root.glob("*.json")
-                        if (record := _read(candidate)) is not None), default=0) + 1
+                        if (record := _scan_read(candidate)) is not None), default=0) + 1
         record = dict(delivery_id=key, id=key, owner=pinned, **pinned,
                       message=message, status="queued", created_at=time.time_ns(),
                       sequence=sequence, **({"author": dict(author)} if author else {}))
@@ -162,7 +192,7 @@ def claim_pending_delivery(
     with _locked(profile_home) as root:
         pending = []
         for path in root.glob("*.json"):
-            record = _read(path)
+            record = _scan_read(path)
             if record is not None and record["status"] == "queued" and _matches(profile_home, record, current):
                 pending.append(record)
         if not pending:
