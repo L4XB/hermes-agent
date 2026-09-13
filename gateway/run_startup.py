@@ -1108,7 +1108,27 @@ class GatewayStartupMixin:
                 logger.info("\u2713 %s connected%s", platform.value, " (degraded)" if _degraded else "")
                 continue
             # outcome == "failed"
-            logger.warning("\u2717 %s failed to connect", platform.value)
+            # The reason is on the adapter right here, and used to go only to
+            # the runtime-status file: neither gateway.log nor the journal
+            # recorded it, so this line could not tell bad config from bad
+            # credentials from missing IAM from an unreachable network
+            # (#110072). Same shape the mid-run path already logs in
+            # `_handle_adapter_fatal_error_impl`, at warning rather than error
+            # because startup may still retry this platform.
+            if adapter.has_fatal_error:
+                logger.warning(
+                    "\u2717 %s failed to connect (%s): %s", platform.value,
+                    adapter.fatal_error_code or "unknown",
+                    adapter.fatal_error_message or "unknown error",
+                )
+            else:
+                # Distinguishable on purpose: a blank reason is itself the
+                # diagnosis — the adapter reported none, so this is the
+                # transient path queued for retry below, not a silent fatal.
+                logger.warning(
+                    "\u2717 %s failed to connect (adapter reported no reason)",
+                    platform.value,
+                )
             # A failed connect() may have allocated ClientSessions / poll tasks / subprocesses.
             await self._safe_adapter_disconnect(adapter, platform)
             if not adapter.has_fatal_error:

@@ -575,3 +575,76 @@ async def test_token_lock_plus_retryable_peer_stays_alive(monkeypatch, tmp_path)
         assert state["platforms"]["discord"]["state"] == "retrying"
     finally:
         await runner.stop()
+
+
+class _SilentFailureAdapter(BasePlatformAdapter):
+    """connect() fails and reports nothing — the transient shape."""
+
+    def __init__(self):
+        super().__init__(PlatformConfig(enabled=True, token="***"), Platform.DISCORD)
+
+    async def connect(self, *, is_reconnect: bool = False) -> bool:
+        return False
+
+    async def disconnect(self) -> None:
+        self._mark_disconnected()
+
+    async def send(self, chat_id, content, reply_to=None, metadata=None):
+        raise NotImplementedError
+
+    async def get_chat_info(self, chat_id):
+        return {"id": chat_id}
+
+
+async def _start_with(monkeypatch, tmp_path, adapter_factory):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    config = GatewayConfig(
+        platforms={Platform.DISCORD: PlatformConfig(enabled=True, token="***")},
+        sessions_dir=tmp_path / "sessions",
+    )
+    runner = GatewayRunner(config)
+    monkeypatch.setattr(
+        runner, "_create_adapter", lambda platform, platform_config: adapter_factory()
+    )
+    await runner.start()
+
+
+@pytest.mark.asyncio
+async def test_connect_failure_logs_the_reason(monkeypatch, tmp_path, caplog):
+    """The cause was computed at this exact point and written only to the
+    runtime-status file, so `gateway.log` and the journal recorded a line that
+    could not tell bad config from bad credentials from missing IAM from an
+    unreachable network (#110072)."""
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        await _start_with(monkeypatch, tmp_path, _NonRetryableFailureAdapter)
+
+    failure = next(
+        (r for r in caplog.records if "failed to connect" in r.getMessage()), None
+    )
+    assert failure is not None, "the connect failure must still be logged"
+    message = failure.getMessage()
+    assert "discord-bot-token_lock" in message
+    assert "Discord bot token already in use" in message
+
+
+@pytest.mark.asyncio
+async def test_a_reasonless_failure_says_so_instead_of_inventing_one(
+    monkeypatch, tmp_path, caplog
+):
+    """An adapter that reports nothing is the transient path queued for retry.
+    Saying "unknown" in the same shape as a real code would read as a reported
+    diagnosis; the absence is itself the diagnosis."""
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        await _start_with(monkeypatch, tmp_path, _SilentFailureAdapter)
+
+    failure = next(
+        (r for r in caplog.records if "failed to connect" in r.getMessage()), None
+    )
+    assert failure is not None
+    message = failure.getMessage()
+    assert "no reason" in message
+    assert "unknown" not in message
