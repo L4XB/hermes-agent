@@ -197,3 +197,53 @@ def test_populated_platforms_produce_no_empty_list_warning():
     cfg = {"cli": ["hermes-cli"], "telegram": ["hermes-telegram"]}
     warnings = validate_platform_toolsets(cfg, _is_valid)
     assert warnings == []
+
+
+# --- MCP server names in platform_toolsets (#109791) ---------------------------------
+#
+# A name in that list is not always a toolset: `tools_config._merge_mcp_servers` reads the
+# MCP server names out of it as the platform's ALLOWLIST. The validator only knew about
+# native toolsets, so every MCP name drew an "unknown toolset" warning suggesting
+# `hermes-<platform>` — and taking that suggestion empties the allowlist, which falls back
+# to every globally enabled MCP server, changing the platform's tool surface.
+
+_MCP_SERVERS = {"drawio", "github"}
+
+
+def test_mcp_server_name_is_not_an_unknown_toolset():
+    warnings = validate_platform_toolsets(
+        {"cli": ["hermes-cli", "drawio", "github"]}, _is_valid, extra_valid_names=_MCP_SERVERS
+    )
+    assert warnings == []
+
+
+def test_a_platform_listing_only_mcp_servers_has_tools():
+    # The allowlist alone is a working tool surface, so neither the per-platform net nor the
+    # global one should fire.
+    warnings = validate_platform_toolsets(
+        {"cli": ["drawio"]}, _is_valid, extra_valid_names=_MCP_SERVERS
+    )
+    assert warnings == []
+
+
+def test_a_typo_in_a_toolset_name_still_warns_with_mcp_names_present():
+    warnings = validate_platform_toolsets(
+        {"cli": ["kanbn", "drawio"]}, _is_valid, extra_valid_names=_MCP_SERVERS
+    )
+    assert [w for w in warnings if "unknown toolset 'kanbn'" in w]
+    assert not any("drawio" in w for w in warnings)
+
+
+def test_a_typo_in_an_mcp_name_still_warns():
+    # `drawioo` is neither a toolset nor a registered server, so it is exactly the mistake
+    # the warning exists for.
+    warnings = validate_platform_toolsets(
+        {"cli": ["hermes-cli", "drawioo"]}, _is_valid, extra_valid_names=_MCP_SERVERS
+    )
+    assert [w for w in warnings if "unknown toolset 'drawioo'" in w]
+
+
+def test_without_extra_valid_names_behaviour_is_unchanged():
+    # The parameter is optional, and every existing caller that omits it sees what it saw.
+    warnings = validate_platform_toolsets({"cli": ["hermes-cli", "drawio"]}, _is_valid)
+    assert [w for w in warnings if "unknown toolset 'drawio'" in w]

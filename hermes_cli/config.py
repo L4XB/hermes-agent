@@ -1409,9 +1409,12 @@ def _warn_invalid_platform_toolsets(results: Dict[str, Any], quiet: bool) -> Non
         from toolsets import validate_toolset
         from hermes_cli.toolset_validation import validate_platform_toolsets
         from hermes_cli.toolset_scope import toolset_allowed_for_platform
+        from hermes_cli.tools_config import enabled_mcp_server_names
 
+        raw_config = read_raw_config()
         for w in validate_platform_toolsets(
-                read_raw_config().get("platform_toolsets"), validate_toolset, toolset_allowed_for_platform):
+                raw_config.get("platform_toolsets"), validate_toolset, toolset_allowed_for_platform,
+                extra_valid_names=enabled_mcp_server_names(raw_config)):
             results["warnings"].append(w)
             if not quiet:
                 print(f"  ⚠ {w}")

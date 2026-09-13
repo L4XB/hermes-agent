@@ -1,6 +1,6 @@
 """Validation for the ``platform_toolsets`` config section."""
 
-from typing import Callable, List
+from typing import Callable, Iterable, List, Optional
 
 from hermes_cli.platforms import PLATFORMS
 from hermes_cli.toolset_scope import toolset_allowed_for_platform
@@ -31,14 +31,19 @@ def _platform_default_is_valid(
 def validate_platform_toolsets(
     platform_toolsets: object, is_valid_toolset: Callable[[str], bool],
     is_allowed_for_platform: Callable[[str, str], bool] = toolset_allowed_for_platform,
+    extra_valid_names: Optional[Iterable[str]] = None,
 ) -> List[str]:
     """Return human-readable warnings for a ``platform_toolsets`` mapping.
     Reports: a toolset name ``is_valid_toolset`` rejects (suggesting ``hermes-<platform>`` when that
     would have been valid); a non-empty mapping resolving to zero valid toolsets (agent would start with
     no tools); a platform with no valid toolsets, checked per-platform because the global net is
     suppressed once any platform is valid; and non-list platform values, which fall back to the platform
-    default. ``is_valid_toolset`` is injected so this does no registry imports or I/O."""
+    default. ``is_valid_toolset`` is injected so this does no registry imports or I/O.
+    ``extra_valid_names`` carries the entries that are valid without being toolsets at all - MCP
+    server names, which act as the platform's MCP allowlist (``tools_config._merge_mcp_servers``);
+    it is passed in for the same reason, so the caller owns the config read."""
     warnings: List[str] = []
+    extra_valid = frozenset(extra_valid_names or ())
     if not isinstance(platform_toolsets, dict) or not platform_toolsets:
         return warnings
 
@@ -67,6 +72,14 @@ def validate_platform_toolsets(
 
         for name in raw:
             if not isinstance(name, str) or not name:
+                continue
+            if name in extra_valid:
+                # A load-bearing entry that is not a toolset: an MCP server name here IS the
+                # platform's MCP allowlist. It answers neither `is_valid_toolset` nor
+                # `is_allowed_for_platform`, so it has to be settled before both - and it does give
+                # the platform tools, so it counts toward "this platform has some".
+                valid_count += 1
+                platform_valid_count += 1
                 continue
             if not is_valid_toolset(name):
                 hint = f" — did you mean '{default}'?" if default_valid else ""
