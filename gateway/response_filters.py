@@ -56,6 +56,19 @@ def is_intentional_silence_response(response: Any) -> bool:
     return any(c in LIVE_GATEWAY_SILENT_MARKERS for c in _canonical_silence_candidates(response))
 
 
+def silent_delivery_reply(reply: Any) -> tuple[str, bool]:
+    """Split a completed turn into ``(deliverable_text, silent)`` for a delivery path.
+
+    A bare silence marker is an instruction to the delivery layer, never chat
+    text, so it delivers nothing and reports ``silent``. Every other response
+    passes through unchanged — prose that merely mentions ``NO_REPLY`` is a
+    normal reply. Delivery paths outside the gateway share this so they cannot
+    drift from the gateway's own contract (#110782).
+    """
+    text = "" if reply is None else reply if isinstance(reply, str) else str(reply)
+    return ("", True) if is_intentional_silence_response(text) else (text, False)
+
+
 def is_autonomous_silence_response(response: Any) -> bool:
     """Loose silence matcher for autonomous lanes (cron, webhook).
 

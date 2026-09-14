@@ -279,7 +279,13 @@ def write_reply(root: Path | str, envelope_id: str, *, reply: str = "", error: s
 
         code = classify_agent_error(err)
     path = base / REPLIES_DIR / f"{safe}.json"
-    _atomic_write_json(path, {"id": safe, "at": int(time.time()), "reply": str(reply or ""), "error": err, "reason": code})
+    # Same filter the gateway applies to a finished turn, so a relayed reply
+    # cannot carry a marker the local path would have dropped (#110782).
+    from gateway.response_filters import silent_delivery_reply
+
+    text, silent = silent_delivery_reply(reply)
+    _atomic_write_json(path, {"id": safe, "at": int(time.time()), "reply": text,
+                              "silent": silent, "error": err, "reason": code})
     return path
 
 
@@ -341,6 +347,11 @@ def waiter_command(root: Path | str, envelope: dict) -> str:
         "            tag = ' [reason: ' + code + ']' if code else ''\n"
         "            print('Delivery to ' + label + ' failed' + tag + ': ' + d['error'])\n"
         "            sys.exit(1)\n"
+        # A silent turn is reported as silence, not as an empty reply and never
+        # as the marker itself. See #110782.
+        "        if d.get('silent'):\n"
+        "            print(label + ' read the message and chose not to reply.')\n"
+        "            sys.exit(0)\n"
         "        print('Reply from ' + label + ':')\n"
         "        print(d.get('reply') or '(empty reply)')\n"
         "        sys.exit(0)\n"

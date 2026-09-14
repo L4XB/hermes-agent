@@ -203,6 +203,36 @@ def test_waiter_picks_up_reply_within_a_sub_second_cadence(root):
     assert elapsed < 1.5, f"waiter took {elapsed:.2f}s to notice a reply written at 0.3s"
 
 
+def test_waiter_reports_a_silent_turn_without_printing_the_marker(root):
+    """A relayed silence reaches the sender as silence, not as '(empty reply)'
+    and never as the marker string itself (#110782)."""
+    import shlex
+    import subprocess
+
+    env = {"id": "e" * 32, "target_handle": "researcher", "target_connection": "ssh-vps"}
+    bot_relay.write_reply(root, env["id"], reply="NO_REPLY")
+    proc = subprocess.run(shlex.split(bot_relay.waiter_command(root, env)),
+                          capture_output=True, text=True, timeout=10)
+
+    assert proc.returncode == 0
+    assert "NO_REPLY" not in proc.stdout
+    assert "(empty reply)" not in proc.stdout
+    assert "chose not to reply" in proc.stdout
+
+
+def test_waiter_still_prints_a_real_reply(root):
+    import shlex
+    import subprocess
+
+    env = {"id": "f" * 32, "target_handle": "researcher", "target_connection": "ssh-vps"}
+    bot_relay.write_reply(root, env["id"], reply="pong")
+    proc = subprocess.run(shlex.split(bot_relay.waiter_command(root, env)),
+                          capture_output=True, text=True, timeout=10)
+
+    assert proc.returncode == 0 and "pong" in proc.stdout
+    assert "chose not to reply" not in proc.stdout
+
+
 def test_roster_rejects_connection_id_outside_handle_charset(root):
     bad = [
         {"profile": "researcher", "handle": "researcher", "connection_id": "vps'); print(1)"},

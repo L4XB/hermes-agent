@@ -147,7 +147,13 @@ def _(rid, params: dict, _root=_relay_root, _run=_run_delivery) -> dict:
             detail = _detail(proc)
             return _err(rid, 5092, f"delivery turn failed: {detail or proc.returncode}",
                         data={"reason": classify_agent_error(detail)})
-        return _ok(rid, {"reply": (proc.stdout or "").strip()})
+        # A bare silence marker is the bot declining to speak, not chat text: the
+        # gateway has always dropped it, and this door must too or the literal
+        # NO_REPLY lands in the Bot Chat transcript (#110782). The flag lets the
+        # Desktop show THAT the turn was silent without rendering the marker.
+        from gateway.response_filters import silent_delivery_reply
+        reply, silent = silent_delivery_reply((proc.stdout or "").strip())
+        return _ok(rid, {"reply": reply, "silent": silent})
     except subprocess.TimeoutExpired:
         return _err(rid, 5093, "delivery turn timed out")
     except Exception as e:

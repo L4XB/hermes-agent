@@ -103,6 +103,53 @@ def test_deliver_validates_profile_and_runs_transport(home, monkeypatch):
     assert not calls
 
 
+def test_deliver_drops_a_bare_silence_marker(home, monkeypatch):
+    """A finished turn that is only a silence marker delivers nothing (#110782).
+
+    The gateway has always dropped these; this door used to hand the literal
+    string back, and the Desktop rendered it into the Bot Chat transcript.
+    """
+
+    class _Proc:
+        returncode = 0
+        stderr = ""
+
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+    def _run_with(stdout):
+        monkeypatch.setattr("subprocess.run", lambda argv, **kw: _Proc(stdout))
+        return _result(srv._methods["bot_relay.deliver"](1, {"profile": "ops", "message": "ping"}))
+
+    for marker in ("NO_REPLY", "  [SILENT]\n", "no reply", ".NO_REPLY."):
+        out = _run_with(marker)
+        assert out == {"reply": "", "silent": True}, marker
+
+    # Prose that merely mentions a marker is a normal reply, and so is anything
+    # else: the filter must not eat real answers.
+    out = _run_with("I would answer NO_REPLY if there were nothing to say.")
+    assert out["silent"] is False
+    assert out["reply"] == "I would answer NO_REPLY if there were nothing to say."
+    assert _run_with("pong from ops") == {"reply": "pong from ops", "silent": False}
+
+
+def test_reply_marks_a_silent_relayed_turn(home):
+    """`bot_relay.reply` is the other delivery path and shares the same filter."""
+    envelope_id = "b" * 32
+    _result(srv._methods["bot_relay.reply"](1, {"id": envelope_id, "reply": "NO_REPLY"}))
+    record = json.loads(
+        (bot_relay.relay_root(home) / bot_relay.REPLIES_DIR / f"{envelope_id}.json").read_text(encoding="utf-8"))
+    assert record["reply"] == ""
+    assert record["silent"] is True
+
+    other = "c" * 32
+    _result(srv._methods["bot_relay.reply"](2, {"id": other, "reply": "pong"}))
+    kept = json.loads(
+        (bot_relay.relay_root(home) / bot_relay.REPLIES_DIR / f"{other}.json").read_text(encoding="utf-8"))
+    assert kept["reply"] == "pong"
+    assert kept["silent"] is False
+
+
 def test_deliver_requires_params(home):
     err = srv._methods["bot_relay.deliver"](1, {"profile": "", "message": ""})
     assert "error" in err
