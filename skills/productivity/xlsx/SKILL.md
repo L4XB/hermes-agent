@@ -179,7 +179,8 @@ LibreOffice or hand the file to the user unconverted.
   `"12,5"` to stay strings.
 - **Dates are datetimes**: Excel stores dates as serial numbers;
   openpyxl returns `datetime`/`date` objects. Dumps here emit ISO
-  strings.
+  strings. Elapsed-time formats (`[h]:mm`) come back as `timedelta`
+  and are dumped as total hours, e.g. `36:00:00`.
 - Sheet names are capped at 31 chars and reject `[ ] : * ? / \`.
 
 ## Verification

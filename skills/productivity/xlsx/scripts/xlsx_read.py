@@ -31,7 +31,7 @@ import argparse
 import csv
 import json
 import sys
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 
 from openpyxl import load_workbook
 
@@ -39,6 +39,13 @@ from openpyxl import load_workbook
 def jsonable(value):
     if isinstance(value, (datetime, date, time)):
         return value.isoformat()
+    if isinstance(value, timedelta):
+        # openpyxl reads elapsed-time formats ([h]:mm, [mm]:ss) as timedelta, which
+        # json cannot encode. Render total hours the way the sheet shows them.
+        seconds = round(value.total_seconds())
+        sign = "-" if seconds < 0 else ""
+        seconds = abs(seconds)
+        return f"{sign}{seconds // 3600}:{seconds // 60 % 60:02d}:{seconds % 60:02d}"
     return value
 
 

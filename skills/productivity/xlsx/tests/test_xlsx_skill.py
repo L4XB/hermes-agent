@@ -169,6 +169,33 @@ def test_read_sheets_json_formulas(workbook, tmp_path):
     assert "Zürich" in text and "Фамилия" in text
 
 
+def test_read_duration_cells(tmp_path):
+    # openpyxl reads an elapsed-time format as timedelta, which json cannot encode,
+    # so --json used to fail on any sheet with a duration column.
+    from datetime import timedelta
+
+    from openpyxl import Workbook
+
+    book = tmp_path / "durations.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Times"
+    ws.append(["task", "spent"])
+    for task, spent in [("build", timedelta(hours=36)),
+                        ("review", timedelta(minutes=90)),
+                        ("refund", timedelta(hours=-6))]:
+        ws.append([task, spent])
+        ws.cell(row=ws.max_row, column=2).number_format = "[h]:mm:ss"
+    wb.save(book)
+
+    dump = json.loads(run("xlsx_read.py", book, "--json").stdout)
+    assert dump["rows"][1:] == [["build", "36:00:00"], ["review", "1:30:00"],
+                                ["refund", "-6:00:00"]]
+
+    csv_text = run("xlsx_read.py", book, "--csv").stdout
+    assert "build,36:00:00" in csv_text.splitlines()
+
+
 def test_csv_roundtrip_nonascii(tmp_path):
     src = tmp_path / "src.csv"
     with open(src, "w", newline="", encoding="utf-8") as fh:
