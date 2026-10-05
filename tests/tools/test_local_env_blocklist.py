@@ -440,6 +440,26 @@ def test_builders_strip_runtime_markers_and_owned_paths(child_env, monkeypatch, 
     assert dict(os.environ) == before
 
 
+@pytest.mark.parametrize("builder", ["foreground", "background", "factory", "nonterminal"])
+def test_builders_strip_conda_activation_state_with_its_prefix(child_env, monkeypatch, builder):
+    # With CONDA_SHLVL>=1 and no CONDA_PREFIX, `conda activate` builds a deactivate stack for an
+    # environment it cannot resolve and crashes in every child shell (#109973). The installation
+    # pointers name conda itself, not an active environment, so they stay.
+    activation = {"CONDA_PREFIX": "/opt/conda/envs/hermes", "CONDA_SHLVL": "1",
+                  "CONDA_DEFAULT_ENV": "hermes", "CONDA_PROMPT_MODIFIER": "(hermes) "}
+    installation = {"CONDA_EXE": "/opt/conda/bin/conda", "CONDA_PYTHON_EXE": "/opt/conda/bin/python"}
+    for k, v in {**activation, **installation}.items():
+        monkeypatch.setenv(k, v)
+    factories = {
+        "foreground": lambda: local._make_run_env({}),
+        "background": lambda: local._sanitize_subprocess_env(dict(os.environ)),
+        "factory": local.build_subprocess_env,
+        "nonterminal": local.hermes_subprocess_env,
+    }
+    actual = observe_child(factories[builder](), [*activation, *installation])
+    assert actual == {**dict.fromkeys(activation), **installation}
+
+
 @pytest.mark.parametrize("builder,base_force,extra_force", [
     ("foreground", "base-forced", "extra-forced"),
     ("background", None, "extra-forced"),
@@ -686,60 +706,6 @@ def test_foreground_minimal_path_preserves_operator_precedence(child_env, monkey
     assert "/opt/homebrew/bin" in result and "/opt/homebrew/sbin" in result
     assert "" not in result
     assert result.count("/custom/bin") == 1
-
-    def test_conda_activation_state_stripped_with_the_prefix(self):
-        """A half-scrubbed conda activation crashes conda itself.
-
-        With CONDA_SHLVL>=1 and no CONDA_PREFIX, `conda activate` believes an
-        environment is already active and builds a deactivate stack for it,
-        then dies resolving the missing prefix -- every login/interactive child
-        shell prints a conda crash report (#109973). The activation state has
-        to leave with the prefix it belongs to.
-        """
-        result_env = _run_with_env(extra_os_env={
-            "CONDA_PREFIX": "/opt/conda/envs/hermes",
-            "CONDA_SHLVL": "1",
-            "CONDA_DEFAULT_ENV": "base",
-            "CONDA_PROMPT_MODIFIER": "(base) ",
-        })
-        assert "CONDA_PREFIX" not in result_env
-        assert "CONDA_SHLVL" not in result_env
-        assert "CONDA_DEFAULT_ENV" not in result_env
-        assert "CONDA_PROMPT_MODIFIER" not in result_env
-
-    def test_conda_installation_pointers_survive(self):
-        """CONDA_EXE/CONDA_PYTHON_EXE name the installation, not an active
-        environment: scripts use them to find conda, and they are harmless
-        without a prefix. Stripping them would remove working functionality,
-        so the fix for #109973 deliberately stops at the activation state."""
-        result_env = _run_with_env(extra_os_env={
-            "CONDA_PREFIX": "/opt/conda/envs/hermes",
-            "CONDA_SHLVL": "1",
-            "CONDA_EXE": "/opt/conda/bin/conda",
-            "CONDA_PYTHON_EXE": "/opt/conda/bin/python",
-        })
-        assert result_env.get("CONDA_EXE") == "/opt/conda/bin/conda"
-        assert result_env.get("CONDA_PYTHON_EXE") == "/opt/conda/bin/python"
-
-    def test_sanitize_subprocess_env_strips_conda_activation_state(self):
-        from tools.environments.local import _sanitize_subprocess_env
-        base = {
-            "CONDA_PREFIX": "/conda",
-            "CONDA_SHLVL": "1",
-            "CONDA_DEFAULT_ENV": "base",
-            "HOME": "/home/user",
-        }
-        result = _sanitize_subprocess_env(base, None)
-        assert "CONDA_SHLVL" not in result
-        assert "CONDA_DEFAULT_ENV" not in result
-        assert result.get("HOME") == "/home/user"
-
-    def test_conda_activation_state_constant_contents(self):
-        from tools.environments.local_env_policy import _CONDA_ACTIVATION_STATE_VARS
-        assert "CONDA_SHLVL" in _CONDA_ACTIVATION_STATE_VARS
-        assert "CONDA_DEFAULT_ENV" in _CONDA_ACTIVATION_STATE_VARS
-        assert "CONDA_PROMPT_MODIFIER" in _CONDA_ACTIVATION_STATE_VARS
-        assert "CONDA_EXE" not in _CONDA_ACTIVATION_STATE_VARS
 
 
 def _make_directory_link(link: Path, target: Path) -> None:
