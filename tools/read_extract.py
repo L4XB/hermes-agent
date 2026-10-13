@@ -499,8 +499,9 @@ def _xlsx_string_text(item: ET.Element, s: str) -> str:
 _XLSX_BUILTIN_DATE_FORMATS = {14: "date", 15: "date", 16: "date", 17: "date", 18: "time",
                               19: "time", 20: "time", 21: "time", 22: "datetime",
                               45: "time", 46: "elapsed", 47: "time"}
-# Quoted text, escaped characters and [...] sections (colors, locales) are not date tokens.
-_XLSX_FORMAT_LITERALS = re.compile(r'"[^"]*"|\\.|\[[^\]]*\]')
+# Quoted text, escaped characters, [...] sections (colors, locales) and the character after a
+# _ (pad) or * (fill) are not date tokens.
+_XLSX_FORMAT_LITERALS = re.compile(r'"[^"]*"|[\\_*].|\[[^\]]*\]')
 _XLSX_ELAPSED = re.compile(r"\[(?:h+|m+|s+)\]", re.IGNORECASE)
 _XLSX_MAX_SERIAL = 2958466  # 9999-12-31 is the last date a workbook can hold
 
@@ -510,8 +511,9 @@ def _xlsx_format_kind(code: str) -> str:
     if _XLSX_ELAPSED.search(code):
         return "elapsed"
     tokens = _XLSX_FORMAT_LITERALS.sub("", code).lower()
-    has_date = "y" in tokens or "d" in tokens
     has_time = "h" in tokens or "s" in tokens
+    # "m" is minutes next to an hour or a second, otherwise a month ("mmmm" alone is a date).
+    has_date = "y" in tokens or "d" in tokens or ("m" in tokens and not has_time)
     if has_date:
         return "datetime" if has_time else "date"
     return "time" if has_time else ""
@@ -587,8 +589,8 @@ def _col_index(ref: str) -> int:
     return max(idx - 1, 0)
 
 
-def _sheet_rows(xml_bytes: bytes, shared: list[str], date_styles: Optional[dict[int, str]] = None,
-                date1904: bool = False) -> list[list[str]]:
+def _sheet_rows(xml_bytes: bytes, shared: list[str], date_styles: dict[int, str],
+                date1904: bool) -> list[list[str]]:
     root = ET.fromstring(xml_bytes)
     s = f"{{{_NS_S}}}"
     rows: list[list[str]] = []
@@ -598,7 +600,7 @@ def _sheet_rows(xml_bytes: bytes, shared: list[str], date_styles: Optional[dict[
         for cell in row.iter(f"{s}c"):
             col = _col_index(cell.get("r", "")) if cell.get("r") else max_col + 1
             if col < _MAX_XLSX_COLS:
-                cells[col] = _cell_value(cell, shared, s, date_styles or {}, date1904)
+                cells[col] = _cell_value(cell, shared, s, date_styles, date1904)
                 max_col = max(max_col, col)
         rows.append([cells.get(i, "") for i in range(max_col + 1)])
     while rows and not any(value.strip() for value in rows[-1]):
@@ -606,12 +608,12 @@ def _sheet_rows(xml_bytes: bytes, shared: list[str], date_styles: Optional[dict[
     return rows
 
 
-def _cell_value(cell: ET.Element, shared: list[str], s: str,
-                date_styles: Optional[dict[int, str]] = None, date1904: bool = False) -> str:
+def _cell_value(cell: ET.Element, shared: list[str], s: str, date_styles: dict[int, str],
+                date1904: bool) -> str:
     value = cell.findtext(f"{s}v") or ""
     typ = cell.get("t", "")
     style = cell.get("s", "0")
-    kind = (date_styles or {}).get(int(style) if style.isdigit() else -1, "")
+    kind = date_styles.get(int(style) if style.isdigit() else -1, "")
     if kind and typ in {"", "n"} and value:
         # A date is stored as a serial number and shown through its number format.
         return _xlsx_date_text(value, kind, date1904)

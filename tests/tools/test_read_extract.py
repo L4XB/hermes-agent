@@ -565,14 +565,15 @@ class TestXlsxExtraction(unittest.TestCase):
                 '</Relationships>')
         # Style 1 is a custom date format, 2 a built-in date and time, 3 a built-in
         # time, 4 an elapsed duration, 5 a number with two decimals, 6 a number with
-        # a quoted unit, 0 General.
+        # a quoted unit, 7 a month-only date ("m" is a month without an hour), 0 General.
         styles = (f'<styleSheet xmlns="{_NS_S}"><numFmts count="3">'
                   '<numFmt numFmtId="164" formatCode="yyyy-mm-dd"/>'
                   '<numFmt numFmtId="165" formatCode="[h]:mm:ss"/>'
-                  '<numFmt numFmtId="166" formatCode="0.0 &quot;days&quot;"/></numFmts>'
-                  '<cellXfs count="7"><xf numFmtId="0"/><xf numFmtId="164"/>'
+                  '<numFmt numFmtId="166" formatCode="0.0 &quot;days&quot;"/>'
+                  '<numFmt numFmtId="167" formatCode="mmmm"/></numFmts>'
+                  '<cellXfs count="8"><xf numFmtId="0"/><xf numFmtId="164"/>'
                   '<xf numFmtId="22"/><xf numFmtId="20"/><xf numFmtId="165"/>'
-                  '<xf numFmtId="2"/><xf numFmtId="166"/></cellXfs></styleSheet>')
+                  '<xf numFmtId="2"/><xf numFmtId="166"/><xf numFmtId="167"/></cellXfs></styleSheet>')
         date = "44103" if date1904 else "45565"
         sheet = (f'<worksheet xmlns="{_NS_S}"><sheetData><row r="1">'
                  f'<c r="A1" s="1"><v>{date}</v></c>'
@@ -584,6 +585,7 @@ class TestXlsxExtraction(unittest.TestCase):
                  '<c r="G1" s="6"><v>3.5</v></c>'
                  # The 1900 date system counts a 1900-02-29 that never existed.
                  '<c r="H1" s="1"><v>59</v></c>'
+                 '<c r="I1" s="7"><v>45536</v></c>'
                  '</row></sheetData></worksheet>')
         _write_xlsx(path, workbook=workbook, rels=rels, shared=None,
                     sheets={"xl/worksheets/sheet1.xml": sheet, "xl/styles.xml": styles})
@@ -593,7 +595,7 @@ class TestXlsxExtraction(unittest.TestCase):
         p = os.path.join(self.tmp, "dates.xlsx")
         self._build_dates(p)
         self.assertIn("2024-09-30\t2024-09-30 14:05:00\t06:00:00\t36:00:00\t12.5\t95"
-                      "\t3.5\t1900-02-28", extract_document_text(p))
+                      "\t3.5\t1900-02-28\t2024-09-01", extract_document_text(p))
 
     def test_dates_in_the_1904_date_system(self):
         p = os.path.join(self.tmp, "dates1904.xlsx")
