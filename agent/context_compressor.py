@@ -2302,7 +2302,7 @@ class ContextCompressor(
         self._anti_thrash_recovery_deadline = self._structural_no_op_backoff_until = 0.0
         self._structural_no_op_len = 0
         # Sizes of the last few COMPLETED boundaries, for the fixed-point check (#109682).
-        self._recent_compaction_sizes: "collections.deque[int]" = collections.deque(
+        self._recent_compaction_sizes: collections.deque[int] = collections.deque(
             maxlen=self._FIXED_POINT_COMPACTIONS
         )
         # Observability only; never feeds the strike latch or the fallback streak.
