@@ -273,7 +273,6 @@ class TestRunCommandDispatchGate:
 
             def _tui_run_slash_input(self, text):
                 seen["slash"].append(text)
-                return None
 
             def __getattr__(self, name):
                 # Everything past the gate is rendering and turn machinery this
